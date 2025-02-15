@@ -1,0 +1,48 @@
+#Archivos de Python
+*.pyc
+*.pyo
+*.pyd
+pycache/
+*.pyo
+
+#Entorno virtual
+venv/
+.venv/
+env/
+ENV/
+
+#Archivos de configuración del entorno
+*.env
+*.ini
+*.cfg
+*.toml
+
+#Dependencias y paquetes
+pip-log.txt
+pip-delete-this-directory.txt
+Pipfile
+Pipfile.lock
+poetry.lock
+
+#Archivos de bases de datos locales
+*.sqlite3
+*.db
+
+#Archivos de logs y debugging
+logs/
+*.log
+*.out
+*.err
+
+#Archivos generados
+.DS_Store
+Thumbs.db
+
+#Configuración de IDEs y editores de texto
+.vscode/
+.idea/
+*.iml
+
+#Archivos de ejecución y caché
+*.swp
+*.swo

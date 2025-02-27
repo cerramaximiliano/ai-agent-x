@@ -47,7 +47,7 @@ class TwitterService:
         """Busca tweets recientes y genera/envía respuestas"""
         try:
             logger.info("🔍 Buscando tweets recientes sobre criptomonedas...")
-            query = "crypto -is:retweet lang:es OR lang:en"
+            query = "crypto -is:retweet (lang:es OR lang:en)"
             tweets = self.read_client.search_recent_tweets(
                 query=query, 
                 max_results=self.max_results, 

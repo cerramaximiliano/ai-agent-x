@@ -14,7 +14,8 @@ class OpenAIService:
             model: Modelo de OpenAI a utilizar
             max_retries: Número máximo de reintentos en caso de error
         """
-        self.client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        # Configuración para versión 0.28.x
+        openai.api_key = OPENAI_API_KEY
         self.model = model
         self.max_retries = max_retries
     
@@ -37,7 +38,8 @@ class OpenAIService:
         
         for attempt in range(self.max_retries):
             try:
-                response = self.client.chat.completions.create(
+                # API para versión 0.28.x
+                response = openai.ChatCompletion.create(
                     model=self.model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -47,8 +49,8 @@ class OpenAIService:
                     temperature=0.7   # Balance entre creatividad y coherencia
                 )
                 
-                # Validar y limpiar la respuesta
-                reply = response.choices[0].message.content.strip()
+                # Estructura de respuesta para 0.28.x
+                reply = response['choices'][0]['message']['content'].strip()
                 
                 # Asegurar que la respuesta no excede el límite de caracteres
                 if len(reply) > 280:
@@ -56,7 +58,7 @@ class OpenAIService:
                     
                 return reply
                 
-            except (openai.RateLimitError, openai.APITimeoutError) as e:
+            except openai.error.RateLimitError as e:
                 wait_time = 2 ** attempt  # Backoff exponencial
                 logger.warning(f"⚠️ OpenAI temporalmente no disponible. Reintentando en {wait_time}s: {e}")
                 time.sleep(wait_time)
@@ -87,7 +89,8 @@ class OpenAIService:
         """
         
         try:
-            response = self.client.chat.completions.create(
+            # API para versión 0.28.x
+            response = openai.ChatCompletion.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -98,7 +101,7 @@ class OpenAIService:
             )
             
             # Extraer el valor numérico
-            relevance_text = response.choices[0].message.content.strip()
+            relevance_text = response['choices'][0]['message']['content'].strip()
             try:
                 relevance = float(relevance_text)
                 # Asegurar que está en el rango correcto

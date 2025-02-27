@@ -78,23 +78,37 @@ class Database:
             author_username: Nombre de usuario del autor del tweet
         """
         db = self._load_db()
+    
+        # Comprobar si el tweet ya fue procesado
+        tweet_already_processed = str(tweet_id) in db["processed_tweets"]
         
         # Registrar el tweet con su contenido y respuesta
         db["processed_tweets"][str(tweet_id)] = {
             "processed_at": datetime.now().isoformat(),
             "responded": responded,
-            "author": author_username,
+            "author_username": author_username,
             "tweet_text": tweet_text,
             "response_text": response_text
         }
         
-        # Actualizar estadísticas
-        db["stats"]["total_processed"] += 1
+        # Actualizar estadísticas sólo si es un tweet nuevo
+        if not tweet_already_processed:
+            db["stats"]["total_processed"] += 1
+        
+        # Si es una respuesta, actualizar contador de respuestas
         if responded:
-            db["stats"]["total_responded"] += 1
+            # Comprobar si ya estaba marcado como respondido
+            old_responded = False
+            if tweet_already_processed:
+                old_responded = db["processed_tweets"][str(tweet_id)].get("responded", False)
+            
+            # Solo incrementar si es nuevo o no estaba respondido antes
+            if not tweet_already_processed or not old_responded:
+                db["stats"]["total_responded"] += 1
         
         self._save_db(db)
         logger.info(f"✅ Tweet {tweet_id} de @{author_username} guardado en la base de datos")
+    
         
     def get_tweet_details(self, tweet_id):
         """

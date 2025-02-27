@@ -1,1 +1,12 @@
-{"processed_tweets": {}, "stats": {"total_processed": 0, "total_responded": 0}}
+{
+  "processed_tweets": {
+    "1895087122702278744": {
+      "processed_at": "2025-02-27T09:22:49.640984",
+      "responded": false
+    }
+  },
+  "stats": {
+    "total_processed": 1,
+    "total_responded": 0
+  }
+}

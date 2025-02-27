@@ -91,7 +91,13 @@ class TwitterService:
             
             if relevance < 0.7:  # Umbral de relevancia
                 logger.info(f"⏭️ Tweet de @{username} ignorado (relevancia: {relevance:.2f})")
-                self.db.mark_tweet_processed(tweet.id, responded=False)
+                self.db.mark_tweet_processed(
+                    tweet_id=tweet.id, 
+                    responded=False,
+                    tweet_text=tweet.text,
+                    response_text=None,
+                    author_username=username
+                )
                 return
                 
             # Generar respuesta con OpenAI
@@ -99,7 +105,13 @@ class TwitterService:
             
             if not response:
                 logger.warning(f"⚠️ No se pudo generar respuesta para tweet de @{username}")
-                self.db.mark_tweet_processed(tweet.id, responded=False)
+                self.db.mark_tweet_processed(
+                    tweet_id=tweet.id, 
+                    responded=False,
+                    tweet_text=tweet.text,
+                    response_text=None,
+                    author_username=username
+                )
                 return
                 
             logger.info(f"📝 Respuesta generada para @{username}: {response}")
@@ -107,23 +119,34 @@ class TwitterService:
             # Responder al tweet si está habilitado
             if self.respond:
                 self._reply_to_tweet(tweet.id, response)
-                self.db.mark_tweet_processed(tweet.id, responded=True)
+                self.db.mark_tweet_processed(
+                    tweet_id=tweet.id, 
+                    responded=True,
+                    tweet_text=tweet.text,
+                    response_text=response,
+                    author_username=username
+                )
             else:
                 logger.info("ℹ️ Modo simulación: no se envió respuesta real")
-                self.db.mark_tweet_processed(tweet.id, responded=False)
+                self.db.mark_tweet_processed(
+                    tweet_id=tweet.id, 
+                    responded=False,
+                    tweet_text=tweet.text,
+                    response_text=response,
+                    author_username=username
+                )
                 
         except Exception as e:
             logger.error(f"❌ Error al procesar tweet {tweet.id}: {e}")
-    
-    def _reply_to_tweet(self, tweet_id, response_text):
-        """Responde a un tweet específico"""
-        try:
-            result = self.write_client.create_tweet(
-                text=response_text,
-                in_reply_to_tweet_id=tweet_id
-            )
-            logger.info(f"✅ Respuesta enviada correctamente. ID: {result.data['id']}")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Error al responder al tweet {tweet_id}: {e}")
-            return False
+        def _reply_to_tweet(self, tweet_id, response_text):
+            """Responde a un tweet específico"""
+            try:
+                result = self.write_client.create_tweet(
+                    text=response_text,
+                    in_reply_to_tweet_id=tweet_id
+                )
+                logger.info(f"✅ Respuesta enviada correctamente. ID: {result.data['id']}")
+                return True
+            except Exception as e:
+                logger.error(f"❌ Error al responder al tweet {tweet_id}: {e}")
+                return False

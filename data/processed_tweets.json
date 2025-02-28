@@ -136,12 +136,57 @@
     "total_responded": 10
   },
   "rate_limits": {
-    "last_encounter": "2025-02-27T22:39:48.736366",
-    "wait_seconds": 900,
+    "last_encounter": "2025-02-28T12:08:02.139643",
+    "wait_seconds": 899,
     "history": [
       {
-        "timestamp": "2025-02-27T22:39:48.736366",
+        "timestamp": "2025-02-28T06:39:57.469212",
         "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T07:09:58.445012",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T07:24:58.856014",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T07:39:59.262925",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T07:54:59.778245",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T08:10:00.217096",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T08:25:00.649491",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T11:53:01.728973",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T11:53:14.733725",
+        "wait_seconds": 887,
+        "endpoint": "search_recent_tweets"
+      },
+      {
+        "timestamp": "2025-02-28T12:08:02.139643",
+        "wait_seconds": 899,
         "endpoint": "search_recent_tweets"
       }
     ]

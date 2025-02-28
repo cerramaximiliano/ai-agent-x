@@ -299,4 +299,4 @@ def create_dashboard():
 if __name__ == "__main__":
     dashboard = create_dashboard()
     # Lanzar el servidor sin activar la cola (queue), que es lo que causa el error
-    dashboard.launch(server_name="0.0.0.0", share=False)
+    dashboard.launch(server_name="0.0.0.0", share=True)

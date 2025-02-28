@@ -134,5 +134,16 @@
   "stats": {
     "total_processed": 19,
     "total_responded": 10
+  },
+  "rate_limits": {
+    "last_encounter": "2025-02-27T22:39:48.736366",
+    "wait_seconds": 900,
+    "history": [
+      {
+        "timestamp": "2025-02-27T22:39:48.736366",
+        "wait_seconds": 900,
+        "endpoint": "search_recent_tweets"
+      }
+    ]
   }
 }

@@ -1,182 +1,298 @@
 import os
 import sys
 import time
-import threading
 import gradio as gr
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Agregar el directorio raíz del proyecto al path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Importar la clase Database
 from utils.database import Database
 
-class TwitterDashboard:
-    def __init__(self, refresh_interval=10, db_file="data/processed_tweets.json"):
-        """
-        Inicializa el dashboard de Twitter con Gradio.
+def format_date(iso_date):
+    """Formatea una fecha ISO a un formato más legible"""
+    if not iso_date:
+        return "Nunca"
+    try:
+        dt = datetime.fromisoformat(iso_date)
+        return dt.strftime("%d/%m/%Y %H:%M:%S")
+    except:
+        return iso_date
+
+def format_time_ago(iso_date):
+    """Convierte una fecha ISO a 'hace X tiempo'"""
+    if not iso_date:
+        return "Nunca"
+    try:
+        dt = datetime.fromisoformat(iso_date)
+        now = datetime.now()
+        delta = now - dt
         
-        Args:
-            refresh_interval: Intervalo de actualización en segundos
-            db_file: Ruta al archivo de la base de datos
+        if delta.days > 0:
+            return f"hace {delta.days} día(s)"
+        elif delta.seconds // 3600 > 0:
+            return f"hace {delta.seconds // 3600} hora(s)"
+        elif delta.seconds // 60 > 0:
+            return f"hace {delta.seconds // 60} minuto(s)"
+        else:
+            return f"hace {delta.seconds} segundo(s)"
+    except:
+        return iso_date
+
+def format_seconds(seconds):
+    """Formatea segundos en un formato más legible"""
+    if not seconds:
+        return "0 segundos"
+    
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    
+    if hours > 0:
+        return f"{int(hours)}h {int(minutes)}m {int(sec)}s"
+    elif minutes > 0:
+        return f"{int(minutes)}m {int(sec)}s"
+    else:
+        return f"{int(sec)}s"
+
+def calculate_reset_time(iso_date, seconds):
+    """Calcula cuando se reseteará el rate limit"""
+    if not iso_date or not seconds:
+        return "Desconocido"
+    
+    try:
+        encounter_time = datetime.fromisoformat(iso_date)
+        reset_time = encounter_time + timedelta(seconds=seconds)
+        now = datetime.now()
+        
+        if reset_time < now:
+            return "Ya disponible"
+        
+        delta = reset_time - now
+        if delta.days > 0:
+            return f"En {delta.days}d {(delta.seconds // 3600)}h {(delta.seconds % 3600) // 60}m"
+        elif delta.seconds // 3600 > 0:
+            return f"En {delta.seconds // 3600}h {(delta.seconds % 3600) // 60}m"
+        else:
+            return f"En {delta.seconds // 60}m {delta.seconds % 60}s"
+    except:
+        return "Desconocido"
+
+def get_stats_html():
+    """Obtiene estadísticas formateadas en HTML"""
+    db = Database()
+    stats = db.get_stats()
+    processed = stats.get('total_processed', 0)
+    responded = stats.get('total_responded', 0)
+    
+    # Calcular porcentaje de respuesta
+    response_rate = (responded / processed * 100) if processed > 0 else 0
+    
+    stats_html = f"""
+    <div style="background-color: #f5f7ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <h2 style="margin-top: 0; color: #3b5998;">Estadísticas del Bot</h2>
+        <ul style="list-style-type: none; padding-left: 0;">
+            <li><b>Total de tweets procesados:</b> {processed}</li>
+            <li><b>Total de tweets con respuestas:</b> {responded}</li>
+            <li><b>Tasa de respuesta:</b> {response_rate:.1f}%</li>
+            <li><b>Última actualización:</b> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</li>
+        </ul>
+    </div>
+    """
+    return stats_html
+
+def get_rate_limit_html():
+    """Obtiene información de rate limits formateada en HTML"""
+    db = Database()
+    rate_limits = db.get_rate_limit_info()
+    
+    last_encounter = rate_limits.get('last_encounter')
+    wait_seconds = rate_limits.get('wait_seconds', 0)
+    history = rate_limits.get('history', [])
+    
+    # Si no hay información de rate limits
+    if not last_encounter:
+        return """
+        <div style="background-color: #e8f5e9; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h2 style="margin-top: 0; color: #2e7d32;">Estado de Rate Limits</h2>
+            <p>No se han detectado rate limits desde el inicio del bot.</p>
+        </div>
         """
-        self.refresh_interval = refresh_interval
-        self.db = Database(db_file=db_file)
-        self.last_update = None
-        self.theme = gr.themes.Soft(
-            primary_hue="blue",
-            secondary_hue="indigo",
+    
+    # Calcular tiempo de reset
+    reset_status = calculate_reset_time(last_encounter, wait_seconds)
+    time_ago = format_time_ago(last_encounter)
+    
+    # Determinar color según el estado
+    if reset_status == "Ya disponible":
+        status_color = "#e8f5e9"  # Verde claro
+        text_color = "#2e7d32"    # Verde oscuro
+    else:
+        status_color = "#fff3e0"  # Naranja claro
+        text_color = "#e65100"    # Naranja oscuro
+    
+    # Tabla de historial
+    history_rows = ""
+    for entry in sorted(history, key=lambda x: x.get('timestamp', ''), reverse=True):
+        timestamp = format_date(entry.get('timestamp'))
+        wait_time = format_seconds(entry.get('wait_seconds', 0))
+        endpoint = entry.get('endpoint', 'Desconocido')
+        
+        history_rows += f"""
+        <tr>
+            <td>{timestamp}</td>
+            <td>{wait_time}</td>
+            <td>{endpoint}</td>
+        </tr>
+        """
+    
+    rate_limit_html = f"""
+    <div style="background-color: {status_color}; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <h2 style="margin-top: 0; color: {text_color};">Estado de Rate Limits</h2>
+        <ul style="list-style-type: none; padding-left: 0;">
+            <li><b>Último rate limit:</b> {time_ago}</li>
+            <li><b>Tiempo de espera:</b> {format_seconds(wait_seconds)}</li>
+            <li><b>Estado actual:</b> {reset_status}</li>
+        </ul>
+        
+        <h3 style="margin-top: 15px; color: {text_color};">Historial de Rate Limits</h3>
+        <div style="max-height: 200px; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background-color: rgba(0,0,0,0.05);">
+                        <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">Fecha</th>
+                        <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">Espera</th>
+                        <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">Endpoint</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {history_rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return rate_limit_html
+
+def get_tweets_html():
+    """Obtiene los tweets más recientes formateados en HTML"""
+    db = Database()
+    tweets = db.get_last_processed_tweets(limit=10)
+    
+    if not tweets:
+        return "<p>No hay tweets procesados todavía.</p>"
+    
+    # Formatear los tweets en HTML
+    tweets_html = '<h2>Tweets procesados recientemente</h2>'
+    
+    for i, tweet in enumerate(tweets, 1):
+        # Verificar si el tweet tiene respuesta
+        has_response = tweet.get('response_text') is not None
+        
+        # Badge de estado
+        if tweet.get('responded', False):
+            status_badge = '<span style="background-color: #4CAF50; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">Respondido</span>'
+        elif has_response:
+            status_badge = '<span style="background-color: #2196F3; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">Procesado</span>'
+        else:
+            status_badge = '<span style="background-color: #9E9E9E; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">Ignorado</span>'
+        
+        # Formatear info de sentimiento
+        sentiment_html = ""
+        if "sentiment" in tweet and tweet["sentiment"]:
+            sentiment = tweet["sentiment"]
+            sentiment_label = sentiment.get("label", "desconocido")
+            sentiment_score = sentiment.get("sentiment_score", 0)
+            
+            # Color según sentimiento
+            if sentiment_label == "positive":
+                sentiment_color = "#4CAF50"  # Verde
+            elif sentiment_label == "negative":
+                sentiment_color = "#F44336"  # Rojo
+            else:
+                sentiment_color = "#9E9E9E"  # Gris
+                
+            sentiment_html = f"""
+            <div style="margin-top: 10px; font-size: 14px;">
+                <span style="background-color: {sentiment_color}; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">
+                    Sentimiento: {sentiment_label.capitalize()}
+                </span>
+                <span style="margin-left: 5px; color: #555;">
+                    Score: {sentiment_score:.2f}
+                </span>
+            </div>
+            """
+        
+        # Formatear tweet
+        tweets_html += f"""
+        <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+            <h3 style="margin-top: 0;">Tweet #{i} {status_badge}</h3>
+            <p>
+                <b>De:</b> @{tweet.get('author_username', 'desconocido')}<br>
+                <b>Fecha:</b> {format_date(tweet.get('processed_at', ''))}<br>
+                <b>ID:</b> {tweet.get('id', 'N/A')}
+            </p>
+            {sentiment_html}
+            
+            <div style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                <b>Tweet original:</b><br>
+                <pre style="white-space: pre-wrap; word-break: break-word;">{tweet.get('tweet_text', 'No disponible')}</pre>
+            </div>
+        """
+        
+        # Agregar la respuesta si existe
+        if has_response:
+            tweets_html += f"""
+            <div style="background-color: #e8f5e9; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                <b>Respuesta generada:</b><br>
+                <pre style="white-space: pre-wrap; word-break: break-word;">{tweet.get('response_text', '')}</pre>
+            </div>
+            """
+        
+        tweets_html += "</div>"
+    
+    return tweets_html
+
+def refresh_data():
+    """Actualiza los datos del dashboard"""
+    stats_html = get_stats_html()
+    rate_limit_html = get_rate_limit_html()
+    tweets_html = get_tweets_html()
+    return stats_html, rate_limit_html, tweets_html
+
+def create_dashboard():
+    """Crea la interfaz del dashboard con Gradio"""
+    with gr.Blocks(title="Crypto Bot Dashboard") as dashboard:
+        with gr.Row():
+            with gr.Column(scale=2):
+                gr.HTML('<h1 style="color: #3b5998;">🤖 Dashboard de Crypto Bot para X</h1>')
+            with gr.Column(scale=1):
+                refresh_btn = gr.Button("🔄 Actualizar datos")
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                stats_display = gr.HTML(get_stats_html())
+                rate_limit_display = gr.HTML(get_rate_limit_html())
+            with gr.Column(scale=2):
+                tweets_display = gr.HTML(get_tweets_html())
+        
+        # Manejar el refresco manual
+        refresh_btn.click(
+            fn=refresh_data,
+            inputs=[],
+            outputs=[stats_display, rate_limit_display, tweets_display]
+        )
+        
+        # Actualizar cada 30 segundos
+        dashboard.load(
+            fn=refresh_data,
+            inputs=[],
+            outputs=[stats_display, rate_limit_display, tweets_display],
+            every=30
         )
     
-    def format_date(self, iso_date):
-        """Formatea una fecha ISO a un formato más legible"""
-        try:
-            dt = datetime.fromisoformat(iso_date)
-            return dt.strftime("%d/%m/%Y %H:%M:%S")
-        except:
-            return iso_date
-    
-    def get_stats(self):
-        """Obtiene estadísticas formateadas"""
-        stats = self.db.get_stats()
-        processed = stats.get('total_processed', 0)
-        responded = stats.get('total_responded', 0)
-        
-        # Calcular porcentaje de respuesta
-        response_rate = (responded / processed * 100) if processed > 0 else 0
-        
-        stats_text = f"""
-## Estadísticas del Bot
-
-- **Total de tweets procesados:** {processed}
-- **Total de tweets respondidos:** {responded}
-- **Tasa de respuesta:** {response_rate:.1f}%
-- **Última actualización:** {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}
-        """
-        return stats_text
-    
-    def get_tweets(self):
-        """Obtiene los tweets más recientes"""
-        tweets = self.db.get_last_processed_tweets(limit=10)
-        self.last_update = datetime.now()
-        
-        if not tweets:
-            return "No hay tweets procesados todavía."
-        
-        # Formatear los tweets para mostrar en markdown
-        tweets_text = "## Tweets procesados recientemente\n\n"
-        
-        for i, tweet in enumerate(tweets, 1):
-            # Verificar si el tweet tiene respuesta
-            has_response = tweet.get('response_text') is not None
-            
-            # Badge de estado
-            status_badge = "🟢 Respondido" if tweet.get('responded', False) else "🔵 Procesado"
-            if not has_response:
-                status_badge = "⚪ Ignorado"
-            
-            # Formatear el texto del tweet
-            tweets_text += f"""
-### Tweet #{i} {status_badge}
-
-**De:** @{tweet.get('author', 'desconocido')}  
-**Fecha:** {self.format_date(tweet.get('processed_at', ''))}  
-**ID:** {tweet.get('id', 'N/A')}
-
-**Tweet original:**
-```
-{tweet.get('tweet_text', 'No disponible')}
-```
-"""
-            
-            # Agregar la respuesta si existe
-            if has_response:
-                tweets_text += f"""
-**Respuesta generada:**
-```
-{tweet.get('response_text', '')}
-```
-"""
-            
-            tweets_text += "---\n"
-            
-        return tweets_text
-    
-    def refresh_data(self):
-        """Actualiza los datos del dashboard"""
-        stats = self.get_stats()
-        tweets = self.get_tweets()
-        return stats, tweets
-    
-    def auto_refresh(self, state):
-        """Función para actualización automática"""
-        while state:
-            time.sleep(self.refresh_interval)
-            if not state:
-                break
-            # Trigger manual refresh in background
-            try:
-                stats = self.get_stats()
-                tweets = self.get_tweets()
-                # Enviar actualización a la interfaz
-                # Nota: Esta es una aproximación ya que Gradio no permite
-                # actualizar directamente desde este hilo
-                pass
-            except Exception as e:
-                print(f"Error en actualización automática: {e}")
-    
-    def launch_dashboard(self):
-        """Inicia el dashboard de Gradio"""
-        with gr.Blocks(title="Crypto Bot Dashboard", theme=self.theme) as dashboard:
-            with gr.Row():
-                with gr.Column(scale=2):
-                    title = gr.Markdown("# 🤖 Dashboard de Crypto Bot para X")
-                with gr.Column(scale=1):
-                    auto_refresh_toggle = gr.Checkbox(label="Actualización automática", value=True)
-                    refresh_button = gr.Button("🔄 Actualizar")
-            
-            with gr.Row():
-                with gr.Column(scale=1):
-                    stats_md = gr.Markdown(self.get_stats())
-                    auto_refresh_info = gr.Markdown(f"_Actualizando cada {self.refresh_interval} segundos_")
-                with gr.Column(scale=2):
-                    tweets_md = gr.Markdown(self.get_tweets())
-            
-            # Manejar el refresco manual
-            refresh_button.click(
-                fn=self.refresh_data,
-                inputs=[],
-                outputs=[stats_md, tweets_md]
-            )
-            
-            # Manejar el toggle de auto-refresh
-            auto_refresh_state = [True]
-            
-            def toggle_auto_refresh(value):
-                auto_refresh_state[0] = value
-                return f"_{'Actualizando' if value else 'Actualización automática desactivada'}_"
-            
-            auto_refresh_toggle.change(
-                fn=toggle_auto_refresh,
-                inputs=[auto_refresh_toggle],
-                outputs=[auto_refresh_info]
-            )
-            
-            # Iniciar hilo de actualización automática
-            refresh_thread = threading.Thread(
-                target=self.auto_refresh,
-                args=(auto_refresh_state,),
-                daemon=True
-            )
-            refresh_thread.start()
-        
-        # Lanzar el dashboard
-        dashboard.launch(
-            share=True,
-            server_name="0.0.0.0",
-            server_port=7860,
-            inbrowser=True
-        )
+    return dashboard
 
 if __name__ == "__main__":
-    dashboard = TwitterDashboard(refresh_interval=10)
-    dashboard.launch_dashboard()
+    dashboard = create_dashboard()
+    dashboard.launch(server_name="0.0.0.0")

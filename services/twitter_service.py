@@ -13,19 +13,21 @@ from config.settings import (
 logger = logging.getLogger("crypto_bot.twitter")
 
 class TwitterService:
-    def __init__(self, openai_service, db, max_results=10, respond=False):
+    def __init__(self, openai_service, db, sentiment_service=None, max_results=10, respond=False):
         """
         Inicializa el servicio de Twitter.
         
         Args:
             openai_service: Servicio para generar respuestas con OpenAI
             db: Servicio de base de datos
-            max_results: Número máximo de tweets a procesar por consulta (mínimo 10 requerido por la API)
+            sentiment_service: Servicio opcional para análisis de sentimiento
+            max_results: Número máximo de tweets a procesar por consulta
             respond: Si es True, responderá a los tweets. Si es False, solo simulará
         """
         self.openai_service = openai_service
         self.db = db
-        self.max_results = max_results  # Mínimo 10 requerido por la API
+        self.sentiment_service = sentiment_service
+        self.max_results = max_results
         self.respond = respond
         
         # Cliente solo para lectura (búsqueda)
@@ -50,21 +52,17 @@ class TwitterService:
             logger.info("🔍 Buscando tweets recientes sobre criptomonedas...")
             
             # Usamos una consulta más restrictiva para reducir el volumen
-            query = "crypto -is:retweet lang:en"
+            query = "crypto -is:retweet lang:en OR lang:es"
             
-            try:
-                tweets = self.read_client.search_recent_tweets(
+            # Intentar obtener tweets con manejo de rate limits
+            tweets = self._safe_api_call(
+                lambda: self.read_client.search_recent_tweets(
                     query=query, 
-                    max_results=10,  # Twitter requiere mínimo 10
-                    tweet_fields=["author_id", "created_at"]  # Menos campos
-                )
-            except tweepy.errors.TooManyRequests:
-                logger.warning("⚠️ Rate limit alcanzado durante la búsqueda. Intentando usar datos de demostración.")
-                # En lugar de fallar, usamos algunos datos de demostración
-                tweets = self._generate_demo_tweets()
-            except Exception as e:
-                logger.error(f"❌ Error al buscar tweets: {e}")
-                return
+                    max_results=10,
+                    tweet_fields=["author_id", "created_at"]
+                ),
+                endpoint="search_recent_tweets"
+            )
             
             if not tweets or not tweets.data:
                 logger.info("⚠️ No se encontraron tweets recientes.")
@@ -86,13 +84,9 @@ class TwitterService:
                 # Añadir retrasos aleatorios entre procesos
                 time.sleep(random.uniform(2, 5))
                 
-                # Intentar procesar el tweet con manejo de rate limits
+                # Procesar tweet con manejo de errores
                 try:
                     self._process_single_tweet(tweet)
-                except tweepy.errors.TooManyRequests:
-                    # Si hay un rate limit, guardamos el tweet sin información de usuario
-                    logger.warning(f"⚠️ Rate limit alcanzado al procesar el tweet {tweet.id}. Guardando con información mínima.")
-                    self._process_minimal_tweet(tweet)
                 except Exception as e:
                     logger.error(f"❌ Error al procesar tweet {tweet.id}: {e}")
                     continue
@@ -102,51 +96,84 @@ class TwitterService:
         except Exception as e:
             logger.error(f"❌ Error al procesar tweets: {e}")
     
-    def _generate_demo_tweets(self):
-        """Genera datos de demostración cuando hay rate limits"""
-        # Crear un objeto similar al que devuelve Tweepy pero con datos ficticios
-        class DemoTweet:
-            def __init__(self, id, text, author_id):
-                self.id = id
-                self.text = text
-                self.author_id = author_id
+    def _safe_api_call(self, api_function, endpoint=None, max_retries=3):
+        """
+        Ejecuta una función de API de manera segura, manejando rate limits.
         
-        class DemoResponse:
-            def __init__(self):
-                self.data = [
-                    DemoTweet(1, "Bitcoin looking strong today! #crypto", "user1"),
-                    DemoTweet(2, "What's your favorite altcoin? #crypto", "user2"),
-                    DemoTweet(3, "DeFi projects are the future of finance. #crypto", "user3")
-                ]
+        Args:
+            api_function: Función lambda que contiene la llamada a la API
+            endpoint: Nombre del endpoint para registro (opcional)
+            max_retries: Número máximo de reintentos
+            
+        Returns:
+            El resultado de la función o None si hay un error persistente
+        """
+        retries = 0
         
-        logger.info("🔄 Usando datos de demostración debido a rate limits.")
-        return DemoResponse()
+        while retries < max_retries:
+            try:
+                return api_function()
+            except tweepy.errors.TooManyRequests as e:
+                # Extraer el tiempo de espera de la respuesta
+                wait_seconds = self._extract_rate_limit_wait_time(e)
+                
+                # Registrar el rate limit en la base de datos
+                self.db.record_rate_limit(wait_seconds, endpoint)
+                
+                retries += 1
+                if retries >= max_retries:
+                    logger.error(f"❌ Alcanzado número máximo de reintentos ({max_retries}). Abortando operación.")
+                    raise e
+                
+                logger.warning(f"⚠️ Rate limit alcanzado ({wait_seconds} segundos). Esperando antes de reintentar... ({retries}/{max_retries})")
+                
+                # Esperar el tiempo indicado antes de reintentar
+                time.sleep(wait_seconds)
+            except Exception as e:
+                logger.error(f"❌ Error en llamada a API: {e}")
+                raise e
     
-    def _process_minimal_tweet(self, tweet):
-        """Procesa un tweet con información mínima cuando hay rate limits"""
+    def _extract_rate_limit_wait_time(self, error):
+        """
+        Extrae el tiempo de espera del error de rate limit de Twitter.
+        
+        Args:
+            error: Objeto de excepción de TooManyRequests
+            
+        Returns:
+            int: Tiempo de espera en segundos o valor por defecto
+        """
         try:
-            # Verificar si ya procesamos este tweet
-            if self.db.is_tweet_processed(tweet.id):
-                return
-                
-            username = "desconocido_ratelimit"
+            # Intentar extraer el tiempo de espera del mensaje de error
+            error_message = str(error)
+            if "Retry-After" in error_message:
+                import re
+                wait_time_match = re.search(r'Retry-After: (\d+)', error_message)
+                if wait_time_match:
+                    return int(wait_time_match.group(1))
             
-            # Generar respuesta con OpenAI (esto no afecta los rate limits de Twitter)
-            response = self.openai_service.generate_response(tweet.text)
+            # Intentar extraer el tiempo de reset de los headers de respuesta
+            if hasattr(error, 'response') and hasattr(error.response, 'headers'):
+                headers = error.response.headers
+                if 'x-rate-limit-reset' in headers:
+                    reset_time = int(headers['x-rate-limit-reset'])
+                    current_time = int(time.time())
+                    return max(reset_time - current_time, 1)
+                if 'retry-after' in headers:
+                    return int(headers['retry-after'])
             
-            logger.info(f"📝 Respuesta generada para tweet {tweet.id}: {response}")
+            # Si no podemos extraer el tiempo, verificar el mensaje
+            if "Try again in" in error_message:
+                import re
+                wait_time_match = re.search(r'Try again in (\d+)', error_message)
+                if wait_time_match:
+                    return int(wait_time_match.group(1))
             
-            # Guardar sin responder
-            self.db.mark_tweet_processed(
-                tweet_id=tweet.id, 
-                responded=False,
-                tweet_text=tweet.text,
-                response_text=response,
-                author_username=username
-            )
-                
+            # Si llegamos aquí, no pudimos extraer el tiempo de espera
+            return 60  # Valor por defecto de 1 minuto (60 segundos)
         except Exception as e:
-            logger.error(f"❌ Error al procesar tweet mínimo {tweet.id}: {e}")
+            logger.error(f"Error al extraer tiempo de rate limit: {e}")
+            return 60  # Valor por defecto de 1 minuto (60 segundos)
     
     def _process_single_tweet(self, tweet):
         """Procesa un tweet individual"""
@@ -156,16 +183,32 @@ class TwitterService:
                 logger.debug(f"⏭️ Tweet {tweet.id} ya procesado anteriormente.")
                 return
             
-            # Intentar obtener información del usuario
+            # Obtener información del usuario con manejo seguro de rate limits
+            username = None
             try:
-                user = self.read_client.get_user(id=tweet.author_id, user_fields=["username"])
-                username = user.data.username
-            except:
-                # Si falla, usamos un valor genérico
+                user_result = self._safe_api_call(
+                    lambda: self.read_client.get_user(id=tweet.author_id, user_fields=["username"]),
+                    endpoint="get_user"
+                )
+                
+                if user_result and user_result.data:
+                    username = user_result.data.username
+                else:
+                    username = f"usuario_{tweet.author_id}"
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener información del usuario: {e}")
                 username = f"usuario_{tweet.author_id}"
             
             # Registrar el tweet encontrado
             logger.info(f"📢 Tweet de @{username}: {tweet.text}")
+            
+            # Analizar sentimiento si está disponible
+            sentiment = None
+            if self.sentiment_service:
+                sentiment = self.sentiment_service.analyze_sentiment(tweet.text)
+                sentiment_label = sentiment.get("label", "unknown")
+                sentiment_score = sentiment.get("sentiment_score", 0)
+                logger.info(f"📊 Sentimiento detectado: {sentiment_label} ({sentiment_score:.2f})")
             
             # Analizar la relevancia del tweet
             relevance = self.openai_service.analyze_tweet_relevance(tweet.text)
@@ -177,12 +220,13 @@ class TwitterService:
                     responded=False,
                     tweet_text=tweet.text,
                     response_text=None,
-                    author_username=username
+                    author_username=username,
+                    sentiment_data=sentiment
                 )
                 return
                 
-            # Generar respuesta con OpenAI
-            response = self.openai_service.generate_response(tweet.text)
+            # Generar respuesta con OpenAI, pasando el sentimiento
+            response = self.openai_service.generate_response(tweet.text, sentiment)
             
             if not response:
                 self.db.mark_tweet_processed(
@@ -190,7 +234,8 @@ class TwitterService:
                     responded=False,
                     tweet_text=tweet.text,
                     response_text=None,
-                    author_username=username
+                    author_username=username,
+                    sentiment_data=sentiment
                 )
                 return
                 
@@ -199,12 +244,18 @@ class TwitterService:
             # Responder al tweet si está habilitado
             if self.respond:
                 try:
-                    result = self.write_client.create_tweet(
-                        text=response,
-                        in_reply_to_tweet_id=tweet.id
+                    # Usar _safe_api_call para manejar rate limits al responder
+                    result = self._safe_api_call(
+                        lambda: self.write_client.create_tweet(
+                            text=response,
+                            in_reply_to_tweet_id=tweet.id
+                        ),
+                        endpoint="create_tweet"
                     )
                     responded = True
-                except:
+                    logger.info(f"✅ Respuesta enviada correctamente a @{username}")
+                except Exception as e:
+                    logger.error(f"❌ Error al responder al tweet: {e}")
                     responded = False
                 
                 self.db.mark_tweet_processed(
@@ -212,7 +263,8 @@ class TwitterService:
                     responded=responded,
                     tweet_text=tweet.text,
                     response_text=response,
-                    author_username=username
+                    author_username=username,
+                    sentiment_data=sentiment
                 )
             else:
                 self.db.mark_tweet_processed(
@@ -220,7 +272,8 @@ class TwitterService:
                     responded=False,
                     tweet_text=tweet.text,
                     response_text=response,
-                    author_username=username
+                    author_username=username,
+                    sentiment_data=sentiment
                 )
                 
         except Exception as e:

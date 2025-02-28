@@ -8,7 +8,7 @@ logger = logging.getLogger("crypto_bot.database")
 class Database:
     """
     Clase para gestionar el almacenamiento de tweets procesados.
-    Ahora también almacena el contenido de los tweets y las respuestas generadas.
+    Ahora también almacena datos de sentimiento y rate limits.
     """
     
     def __init__(self, db_file="data/processed_tweets.json"):
@@ -35,6 +35,11 @@ class Database:
                     "stats": {
                         "total_processed": 0,
                         "total_responded": 0
+                    },
+                    "rate_limits": {
+                        "last_encounter": None,
+                        "wait_seconds": 0,
+                        "history": []
                     }
                 }, f)
             logger.info(f"✅ Base de datos inicializada en {self.db_file}")
@@ -46,7 +51,18 @@ class Database:
                 return json.load(f)
         except json.JSONDecodeError:
             logger.error(f"❌ Error al leer la base de datos. Creando nueva.")
-            return {"processed_tweets": {}, "stats": {"total_processed": 0, "total_responded": 0}}
+            return {
+                "processed_tweets": {}, 
+                "stats": {
+                    "total_processed": 0, 
+                    "total_responded": 0
+                },
+                "rate_limits": {
+                    "last_encounter": None,
+                    "wait_seconds": 0,
+                    "history": []
+                }
+            }
     
     def _save_db(self, data):
         """Guarda los datos en la base de datos"""
@@ -66,7 +82,7 @@ class Database:
         db = self._load_db()
         return str(tweet_id) in db["processed_tweets"]
     
-    def mark_tweet_processed(self, tweet_id, responded=False, tweet_text=None, response_text=None, author_username=None):
+    def mark_tweet_processed(self, tweet_id, responded=False, tweet_text=None, response_text=None, author_username=None, sentiment_data=None):
         """
         Marca un tweet como procesado y almacena su contenido y respuesta.
         
@@ -76,9 +92,10 @@ class Database:
             tweet_text: El texto original del tweet
             response_text: La respuesta generada para el tweet
             author_username: Nombre de usuario del autor del tweet
+            sentiment_data: Datos de análisis de sentimiento (opcional)
         """
         db = self._load_db()
-    
+        
         # Comprobar si el tweet ya fue procesado
         tweet_already_processed = str(tweet_id) in db["processed_tweets"]
         
@@ -91,25 +108,79 @@ class Database:
             "response_text": response_text
         }
         
+        # Agregar datos de sentimiento si están disponibles
+        if sentiment_data:
+            db["processed_tweets"][str(tweet_id)]["sentiment"] = sentiment_data
+        
         # Actualizar estadísticas sólo si es un tweet nuevo
         if not tweet_already_processed:
             db["stats"]["total_processed"] += 1
         
-        # Si es una respuesta, actualizar contador de respuestas
-        if responded:
-            # Comprobar si ya estaba marcado como respondido
-            old_responded = False
+        # Si tiene una respuesta generada, contar como respondido para estadísticas
+        if response_text:
+            # Comprobar si ya tenía una respuesta generada
+            old_response = False
             if tweet_already_processed:
-                old_responded = db["processed_tweets"][str(tweet_id)].get("responded", False)
+                old_response = db["processed_tweets"][str(tweet_id)].get("response_text") is not None
             
-            # Solo incrementar si es nuevo o no estaba respondido antes
-            if not tweet_already_processed or not old_responded:
+            # Solo incrementar el contador si es nuevo o no tenía respuesta antes
+            if not tweet_already_processed or not old_response:
                 db["stats"]["total_responded"] += 1
         
         self._save_db(db)
         logger.info(f"✅ Tweet {tweet_id} de @{author_username} guardado en la base de datos")
     
+    def record_rate_limit(self, wait_seconds, endpoint=None):
+        """
+        Registra información sobre un rate limit encontrado.
         
+        Args:
+            wait_seconds: Tiempo de espera en segundos
+            endpoint: Endpoint de la API que generó el rate limit (opcional)
+        """
+        db = self._load_db()
+        
+        # Asegurarse de que la sección de rate_limits existe
+        if "rate_limits" not in db:
+            db["rate_limits"] = {
+                "last_encounter": None,
+                "wait_seconds": 0,
+                "history": []
+            }
+        
+        # Actualizar información del último rate limit
+        current_time = datetime.now().isoformat()
+        db["rate_limits"]["last_encounter"] = current_time
+        db["rate_limits"]["wait_seconds"] = wait_seconds
+        
+        # Agregar a historial (limitado a los últimos 10 eventos)
+        db["rate_limits"]["history"].append({
+            "timestamp": current_time,
+            "wait_seconds": wait_seconds,
+            "endpoint": endpoint
+        })
+        
+        # Mantener historial limitado a 10 eventos
+        if len(db["rate_limits"]["history"]) > 10:
+            db["rate_limits"]["history"] = db["rate_limits"]["history"][-10:]
+        
+        self._save_db(db)
+        logger.info(f"📊 Rate limit registrado: {wait_seconds} segundos")
+    
+    def get_rate_limit_info(self):
+        """
+        Obtiene información sobre los rate limits.
+        
+        Returns:
+            dict: Información de rate limits
+        """
+        db = self._load_db()
+        return db.get("rate_limits", {
+            "last_encounter": None,
+            "wait_seconds": 0,
+            "history": []
+        })
+    
     def get_tweet_details(self, tweet_id):
         """
         Obtiene los detalles de un tweet procesado.
@@ -135,7 +206,7 @@ class Database:
             dict: Estadísticas actuales
         """
         db = self._load_db()
-        return db["stats"]
+        return db.get("stats", {"total_processed": 0, "total_responded": 0})
         
     def get_last_processed_tweets(self, limit=10):
         """
@@ -148,16 +219,16 @@ class Database:
             list: Lista de los últimos tweets procesados con sus detalles
         """
         db = self._load_db()
-        tweets = db["processed_tweets"]
+        tweets = db.get("processed_tweets", {})
         
-        # Convertir a lista y ordenar por fecha de procesamiento (más reciente primero)
+        # Convertir a lista y agregar ID como propiedad
         tweet_list = [
             {"id": tweet_id, **details} 
             for tweet_id, details in tweets.items()
         ]
         
         # Ordenar por fecha de procesamiento (descendente)
-        tweet_list.sort(key=lambda x: x["processed_at"], reverse=True)
+        tweet_list.sort(key=lambda x: x.get("processed_at", ""), reverse=True)
         
         # Retornar solo los más recientes según el límite
         return tweet_list[:limit]

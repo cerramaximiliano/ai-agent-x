@@ -268,6 +268,7 @@ def create_dashboard():
                 gr.HTML('<h1 style="color: #3b5998;">🤖 Dashboard de Crypto Bot para X</h1>')
             with gr.Column(scale=1):
                 refresh_btn = gr.Button("🔄 Actualizar datos")
+                update_info = gr.HTML('<p style="color: #666; font-size: 12px;">Actualización automática: No disponible en esta versión de Gradio</p>')
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -283,16 +284,19 @@ def create_dashboard():
             outputs=[stats_display, rate_limit_display, tweets_display]
         )
         
-        # Actualizar cada 30 segundos
-        dashboard.load(
-            fn=refresh_data,
-            inputs=[],
-            outputs=[stats_display, rate_limit_display, tweets_display],
-            every=30
-        )
+        # Añadir un script para refresco automático
+        gr.HTML("""
+        <script>
+            // Recargar la página cada 30 segundos para actualización automática
+            setInterval(function() {
+                location.reload();
+            }, 30000);
+        </script>
+        """)
     
     return dashboard
 
 if __name__ == "__main__":
     dashboard = create_dashboard()
-    dashboard.launch(server_name="0.0.0.0")
+    # Lanzar el servidor sin activar la cola (queue), que es lo que causa el error
+    dashboard.launch(server_name="0.0.0.0", share=False)
